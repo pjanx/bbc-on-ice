@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -95,7 +96,34 @@ func resolveM3U8(target string) (out []string, err error) {
 	return out, nil
 }
 
-var pathRE = regexp.MustCompile("^/(.*?)/(.*?)/(.*?)$")
+func metaProc(ctx context.Context, name string, out chan<- string) {
+	var current, last string
+	var interval time.Duration
+	for {
+		meta, err := getMeta(name)
+		if err != nil {
+			current = "Error: " + err.Error()
+			interval = 30 * time.Second
+		} else {
+			current = meta.title
+			interval = time.Duration(meta.timeout)
+		}
+		// TODO: select on the send? Can't close it in the main proc.
+		//   Also see https://blog.golang.org/pipelines
+		if current != last {
+			out <- current
+			last = current
+		}
+
+		select {
+		case <-time.After(time.Duration(interval) * time.Millisecond):
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+var pathRE = regexp.MustCompile(`^/(.*?)/(.*?)/(.*?)$`)
 
 func proxy(w http.ResponseWriter, req *http.Request) {
 	const targetURI = "http://a.files.bbci.co.uk/media/live/manifesto/" +
@@ -153,32 +181,8 @@ func proxy(w http.ResponseWriter, req *http.Request) {
 	}
 	fmt.Fprintf(bufrw, "\r\n")
 
-	// TODO: move to a normal function
 	metaChan := make(chan string)
-	go func() {
-		var current, last string
-		var interval time.Duration
-		for {
-			meta, err := getMeta(name)
-			if err != nil {
-				current = "Error: " + err.Error()
-				interval = 30 * time.Second
-			} else {
-				current = meta.title
-				interval = time.Duration(meta.timeout)
-			}
-			if current != last {
-				metaChan <- current
-				last = current
-			}
-
-			select {
-			case <-time.After(time.Duration(interval) * time.Millisecond):
-			case <-req.Context().Done():
-				return
-			}
-		}
-	}()
+	go metaProc(req.Context(), name, metaChan)
 
 	// TODO: move to a normal function
 	// FIXME: this will load a few seconds (one URL) and die
