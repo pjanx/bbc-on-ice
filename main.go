@@ -26,11 +26,13 @@ type meta struct {
 func getMeta(name string) (*meta, error) {
 	const metaBaseURI = "http://polling.bbc.co.uk/radio/nhppolling/"
 	resp, err := http.Get(metaBaseURI + name)
+	if resp != nil {
+		defer resp.Body.Close()
+	}
 	if err != nil {
 		return nil, err
 	}
 	b, err := ioutil.ReadAll(resp.Body)
-	resp.Body.Close()
 	if len(b) < 2 {
 		// There needs to be an enclosing () pair
 		return nil, errors.New("invalid metadata response")
@@ -38,19 +40,19 @@ func getMeta(name string) (*meta, error) {
 
 	// TODO: also retrieve richtracks/is_now_playing, see example file
 	type broadcast struct {
-		Title      string `json:"title"`      // Title of the broadcast
-		Percentage int    `json:"percentage"` // How far we're in
+		Title      string // Title of the broadcast
+		Percentage int    // How far we're in
 	}
 	var v struct {
 		Packages struct {
 			OnAir struct {
-				Broadcasts        []broadcast `json:"broadcasts"`
-				BroadcastNowIndex uint        `json:"broadcastNowIndex"`
+				Broadcasts        []broadcast
+				BroadcastNowIndex uint
 			} `json:"on-air"`
-		} `json:"packages"`
+		}
 		Timeouts struct {
 			PollingTimeout uint `json:"polling_timeout"`
-		} `json:"timeouts"`
+		}
 	}
 	err = json.Unmarshal(b[1:len(b)-1], &v)
 	if err != nil {
@@ -69,11 +71,13 @@ func getMeta(name string) (*meta, error) {
 // Resolve an M3U8 playlist to the first link that seems to be playable
 func resolveM3U8(target string) (out []string, err error) {
 	resp, err := http.Get(target)
+	if resp != nil {
+		defer resp.Body.Close()
+	}
 	if err != nil {
 		return nil, err
 	}
 	b, err := ioutil.ReadAll(resp.Body)
-	resp.Body.Close()
 	if !utf8.Valid(b) {
 		return nil, errors.New("invalid UTF-8")
 	}
@@ -97,6 +101,8 @@ func resolveM3U8(target string) (out []string, err error) {
 }
 
 func metaProc(ctx context.Context, name string, out chan<- string) {
+	defer close(out)
+
 	var current, last string
 	var interval time.Duration
 	for {
@@ -108,10 +114,14 @@ func metaProc(ctx context.Context, name string, out chan<- string) {
 			current = meta.title
 			interval = time.Duration(meta.timeout)
 		}
-		// TODO: select on the send? Can't close it in the main proc.
-		//   Also see https://blog.golang.org/pipelines
 		if current != last {
-			out <- current
+			// TODO: see https://blog.golang.org/pipelines
+			//   find out if we can do this better
+			select {
+			case out <- current:
+			case <-ctx.Done():
+				return
+			}
 			last = current
 		}
 
@@ -211,29 +221,19 @@ func proxy(w http.ResponseWriter, req *http.Request) {
 	}()
 
 	var queuedMeta []byte
-	makeMetaChunk := func() []byte {
-		meta := queuedMeta
-		queuedMeta = nil
-		for len(meta)%16 != 0 {
-			meta = append(meta, 0)
-		}
-		if len(meta) > 16*255 {
-			meta = meta[:16*255]
-		}
-		chunk := []byte{byte(len(meta) / 16)}
-		return append(chunk, meta...)
-	}
-
 	for {
 		select {
 		case title := <-metaChan:
 			queuedMeta = []byte(fmt.Sprintf("StreamTitle='%s'", title))
-		case chunk, connected := <-chunkChan:
-			if !connected {
+		case chunk, ok := <-chunkChan:
+			if !ok {
 				return
 			}
 			if wantMeta {
-				chunk = append(chunk, makeMetaChunk()...)
+				var meta [1 + 16*255]byte
+				meta[0] = byte((copy(meta[1:], queuedMeta) + 15) / 16)
+				chunk = append(chunk, meta[:1+int(meta[0])*16]...)
+				queuedMeta = nil
 			}
 			if _, err := bufrw.Write(chunk); err != nil {
 				return
