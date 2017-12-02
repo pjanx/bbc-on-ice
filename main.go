@@ -8,11 +8,14 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path"
 	"regexp"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	"unicode/utf8"
 )
@@ -245,13 +248,59 @@ func proxy(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
+// https://www.freedesktop.org/software/systemd/man/sd_listen_fds.html
+func socketActivationListener() net.Listener {
+	pid, err := strconv.Atoi(os.Getenv("LISTEN_PID"))
+	if err != nil || pid != os.Getpid() {
+		return nil
+	}
+
+	nfds, err := strconv.Atoi(os.Getenv("LISTEN_FDS"))
+	if err != nil || nfds == 0 {
+		return nil
+	} else if nfds > 1 {
+		log.Fatalln("not supporting more than one listening socket")
+	}
+
+	const firstListenFd = 3
+	syscall.CloseOnExec(firstListenFd)
+	ln, err := net.FileListener(os.NewFile(firstListenFd, "socket activation"))
+	if err != nil {
+		log.Fatalln(err)
+	}
+	return ln
+}
+
+// Had to copy this from Server.ListenAndServe()
+type tcpKeepAliveListener struct{ *net.TCPListener }
+
+func (ln tcpKeepAliveListener) Accept() (c net.Conn, err error) {
+	tc, err := ln.AcceptTCP()
+	if err != nil {
+		return
+	}
+	_ = tc.SetKeepAlive(true)
+	_ = tc.SetKeepAlivePeriod(3 * time.Minute)
+	return tc, nil
+}
+
 func main() {
-	// TODO: also try to support systemd socket activation
-	address := ":8000"
+	listenAddr := ":8000"
 	if len(os.Args) == 2 {
-		address = os.Args[1]
+		listenAddr = os.Args[1]
+	}
+
+	var listener net.Listener
+	if ln := socketActivationListener(); listener != nil {
+		// Keepalives can be set in the systemd unit, see systemd.socket(5)
+		listener = ln
+	} else if ln, err := net.Listen("tcp", listenAddr); err != nil {
+		log.Fatalln(err)
+	} else {
+		listener = tcpKeepAliveListener{ln.(*net.TCPListener)}
 	}
 
 	http.HandleFunc("/", proxy)
-	log.Fatal(http.ListenAndServe(address, nil))
+	// We don't need to clean up properly since we store no data
+	log.Fatalln(http.Serve(listener, nil))
 }
