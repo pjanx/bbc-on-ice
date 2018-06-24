@@ -7,11 +7,7 @@ It adds metadata to the stream so that media players can display it.
 Packages
 --------
 Regular releases are sporadic.  git master should be stable enough.  You can get
-a package with the latest development version from Archlinux's AUR, or from
-openSUSE Build Service for the rest of mainstream distributions.  Consult the
-list of repositories and their respective links at:
-
-https://build.opensuse.org/project/repositories/home:pjanouch:git
+a package with the latest development version from Archlinux's AUR.
 
 Building and Running
 --------------------
@@ -35,9 +31,10 @@ Or you can try telling CMake to make a package for you.  For Debian it is:
 Contributing and Support
 ------------------------
 Use https://git.janouch.name/p/bbc-on-ice to report any bugs, request features,
-or submit pull requests.  If you want to discuss this project, or maybe just
-hang out with the developer, feel free to join me at irc://irc.janouch.name,
-channel #dev.
+or submit pull requests.  `git send-email` is tolerated.  If you want to discuss
+the project, feel free to join me at ircs://irc.janouch.name, channel #dev.
+
+Bitcoin donations are accepted at: 12r5uEWEgcHC46xd64tt3hHt9EUvYYDHe9
 
 License
 -------
