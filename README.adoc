@@ -11,22 +11,28 @@ a package with the latest development version from Archlinux's AUR.
 
 Building and Running
 --------------------
-Build dependencies: CMake, go
+Build dependencies: go
 
- $ git clone --recursive https://git.janouch.name/p/bbc-on-ice.git
- $ mkdir bbc-on-ice/build
- $ cd bbc-on-ice/build
- $ cmake .. -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Debug
- $ make
+ $ git clone https://git.janouch.name/p/bbc-on-ice.git
+ $ cd bbc-on-ice
+ $ go build
 
-To install the application, you can do either the usual:
+To run the local server:
 
- # make install
+ $ ./bbc-on-ice :8000
 
-Or you can try telling CMake to make a package for you.  For Debian it is:
+Streams have URLs in the following form:
 
- $ cpack -G DEB
- # dpkg -i bbc-on-ice-*.deb
+ $ mpv http://localhost:8000/nonuk/sbr_low/bbc_radio_one
+ $ mpv http://localhost:8000/uk/sbr_high/bbc_1xtra
+
+Socket activation
+-----------------
+The provided bbc-on-ice.service and bbc-on-ice.socket should do, just change
+the `ExecStart` path as needed and place the files appropriately.  Then:
+
+ $ systemctl enable bbc-on-ice.socket
+ $ systemctl start bbc-on-ice.socket
 
 Contributing and Support
 ------------------------

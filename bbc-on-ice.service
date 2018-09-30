@@ -1,0 +1,5 @@
+[Unit]
+Description=bbc-on-ice
+
+[Service]
+ExecStart=/usr/bin/bbc-on-ice
