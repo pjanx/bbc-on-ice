@@ -305,7 +305,8 @@ func proxy(w http.ResponseWriter, req *http.Request) {
 	for {
 		select {
 		case title := <-metaChan:
-			queuedMetaUpdate = []byte(fmt.Sprintf("StreamTitle='%s'", title))
+			queuedMetaUpdate = []byte(fmt.Sprintf("StreamTitle='%s'",
+				strings.Replace(title, "'", "’", -1)))
 		case chunk, ok := <-chunkChan:
 			if !ok {
 				return
