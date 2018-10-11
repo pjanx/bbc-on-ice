@@ -289,7 +289,19 @@ func proxy(w http.ResponseWriter, req *http.Request) {
 
 	// dataProc may return less data near the end of a subfile, so we give it
 	// a maximum count of bytes to return at once and do our own buffering.
-	var queuedMetaUpdate, queuedChunk []byte
+	var queuedMetaUpdate, queuedData []byte
+	writeMeta := func() error {
+		if !wantMeta {
+			return nil
+		}
+
+		var meta [1 + 16*255]byte
+		meta[0] = byte((copy(meta[1:], queuedMetaUpdate) + 15) / 16)
+		queuedMetaUpdate = nil
+
+		_, err := bufrw.Write(meta[:1+int(meta[0])*16])
+		return err
+	}
 	for {
 		select {
 		case title := <-metaChan:
@@ -298,31 +310,17 @@ func proxy(w http.ResponseWriter, req *http.Request) {
 			if !ok {
 				return
 			}
-
-			space := metaint - len(queuedChunk)
-			if space > len(chunk) {
-				space = len(chunk)
+			missing := metaint - len(queuedData)
+			if len(chunk) < missing {
+				queuedData = append(queuedData, chunk...)
+				continue
 			}
-
-			queuedChunk = append(queuedChunk, chunk[:space]...)
-			if len(queuedChunk) < metaint {
-				break
-			}
-			if _, err := bufrw.Write(queuedChunk); err != nil {
+			queuedData = append(queuedData, chunk[:missing]...)
+			if _, err := bufrw.Write(queuedData); err != nil {
 				return
 			}
-
-			queuedChunk = chunk[space:]
-			if wantMeta {
-				var meta [1 + 16*255]byte
-				meta[0] = byte((copy(meta[1:], queuedMetaUpdate) + 15) / 16)
-				queuedMetaUpdate = nil
-
-				if _, err := bufrw.Write(meta[:1+int(meta[0])*16]); err != nil {
-					return
-				}
-			}
-			if err := bufrw.Flush(); err != nil {
+			queuedData = chunk[missing:]
+			if writeMeta() != nil || bufrw.Flush() != nil {
 				return
 			}
 		}
