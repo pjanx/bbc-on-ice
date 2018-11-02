@@ -127,7 +127,7 @@ func metaProc(ctx context.Context, name string, out chan<- string) {
 	for {
 		meta, err := getMeta(name)
 		if err != nil {
-			current = "Error: " + err.Error()
+			current = name + " - " + err.Error()
 			interval = 30 * time.Second
 		} else {
 			current = meta.title
