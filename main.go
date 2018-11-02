@@ -122,21 +122,22 @@ func resolveM3U8(target string) (out []string, err error) {
 func metaProc(ctx context.Context, name string, out chan<- string) {
 	defer close(out)
 
+	// "polling_timeout" seems to normally be 25 seconds, which is a lot,
+	// especially considering all the possible additional buffering.
+	const maxInterval = 5 * time.Second
+
 	var current, last string
 	var interval time.Duration
 	for {
 		meta, err := getMeta(name)
 		if err != nil {
 			current = name + " - " + err.Error()
-			interval = 30 * time.Second
+			interval = maxInterval
 		} else {
 			current = meta.title
-			interval = time.Duration(meta.timeout)
-
-			// It seems to normally use 25 seconds which is a lot,
-			// especially considering all the possible additional buffering.
-			if interval > 5000 {
-				interval = 5000
+			interval = time.Duration(meta.timeout) * time.Millisecond
+			if interval > maxInterval {
+				interval = maxInterval
 			}
 		}
 		if current != last {
@@ -149,7 +150,7 @@ func metaProc(ctx context.Context, name string, out chan<- string) {
 		}
 
 		select {
-		case <-time.After(time.Duration(interval) * time.Millisecond):
+		case <-time.After(interval):
 		case <-ctx.Done():
 			return
 		}
