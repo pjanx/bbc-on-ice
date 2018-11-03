@@ -180,9 +180,9 @@ func urlProc(ctx context.Context, playlistURL string, out chan<- string) {
 				return
 			}
 		}
-		// I expect this to be mainly driven by the buffered channel but
-		// a small (less than target duration) additional pause will not hurt.
-		time.Sleep(1 * time.Second)
+		// Media players will happily buffer the whole playlist at once,
+		// a small (less than target duration) additional pause is appropriate.
+		time.Sleep(3 * time.Second)
 	}
 }
 
