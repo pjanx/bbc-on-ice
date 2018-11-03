@@ -2,7 +2,9 @@ bbc-on-ice
 ==========
 
 'bbc-on-ice' is a SHOUTcast (ICY protocol) bridge for BBC radio streams.
-It adds metadata to the stream so that media players can display it.
+It adds metadata to the stream so that media players can display it.  There are
+some inherent technical limitations to how accurate the information can be
+but it's definitely better to have an approximate title than nothing.
 
 Packages
 --------
