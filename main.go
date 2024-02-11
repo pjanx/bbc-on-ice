@@ -21,9 +21,9 @@ import (
 )
 
 const (
-	targetURI = "http://a.files.bbci.co.uk/media/live/manifesto/" +
-		"audio/simulcast/hls/%s/%s/ak/%s.m3u8"
-	metaBaseURI = "http://polling.bbc.co.uk/radio/nhppolling/"
+	targetURI = "http://as-hls-%s-live.akamaized.net/pool_904/live/%s/" +
+		"%s/%s.isml/%s-audio%%3d%s.norewind.m3u8"
+	metaURI = "https://rms.api.bbc.co.uk/v2/services/%s/segments/latest"
 )
 
 type meta struct {
@@ -33,7 +33,7 @@ type meta struct {
 
 // getMeta retrieves and decodes metadata info from an independent webservice.
 func getMeta(name string) (*meta, error) {
-	resp, err := http.Get(metaBaseURI + name)
+	resp, err := http.Get(fmt.Sprintf(metaURI, name))
 	if resp != nil {
 		defer resp.Body.Close()
 	}
@@ -41,46 +41,41 @@ func getMeta(name string) (*meta, error) {
 		return nil, err
 	}
 	b, err := ioutil.ReadAll(resp.Body)
-	if len(b) < 2 {
-		// There needs to be an enclosing () pair
-		return nil, errors.New("invalid metadata response")
-	}
 
-	type broadcast struct {
-		Title      string // title of the broadcast
-		Percentage int    // how far we're in
-	}
+	// TODO: update more completely for the new OpenAPI
+	//  - `broadcasts/poll/bbc_radio_one` looks almost useful
+	//  - https://rms.api.bbc.co.uk/v2/experience/inline/play/${name}
+	//    seems to be what we want, even provides timer/polling values
 	var v struct {
-		Packages struct {
-			OnAir struct {
-				Broadcasts        []broadcast
-				BroadcastNowIndex uint
-			} `json:"on-air"`
-			Richtracks []struct {
-				Artist       string
-				Title        string
-				IsNowPlaying bool `json:"is_now_playing"`
-			}
-		}
-		Timeouts struct {
-			PollingTimeout uint `json:"polling_timeout"`
-		}
+		Data []struct {
+			Titles struct {
+				Primary   string  `json:"primary"`
+				Secondary *string `json:"secondary"`
+				Tertiary  *string `json:"tertiary"`
+			} `json:"titles"`
+			Offset struct {
+				NowPlaying bool `json:"now_playing"`
+			} `json:"offset"`
+		} `json:"data"`
 	}
-	err = json.Unmarshal(b[1:len(b)-1], &v)
+	err = json.Unmarshal(b, &v)
 	if err != nil {
 		return nil, errors.New("invalid metadata response")
 	}
-	onAir := v.Packages.OnAir
-	if onAir.BroadcastNowIndex >= uint(len(onAir.Broadcasts)) {
-		return nil, errors.New("no active broadcast")
+	if len(v.Data) == 0 || !v.Data[0].Offset.NowPlaying {
+		return nil, errors.New("no song is playing")
 	}
-	title := onAir.Broadcasts[onAir.BroadcastNowIndex].Title
-	for _, rt := range v.Packages.Richtracks {
-		if rt.IsNowPlaying {
-			title = rt.Artist + " - " + rt.Title + " / " + title
-		}
+
+	titles := v.Data[0].Titles
+	parts := []string{}
+	if titles.Tertiary != nil {
+		parts = append(parts, *titles.Tertiary)
 	}
-	return &meta{timeout: v.Timeouts.PollingTimeout, title: title}, nil
+	if titles.Secondary != nil {
+		parts = append(parts, *titles.Secondary)
+	}
+	parts = append(parts, titles.Primary)
+	return &meta{timeout: 5000, title: strings.Join(parts, " - ")}, nil
 }
 
 // resolveM3U8 resolves an M3U8 playlist to the first link that seems to
@@ -239,15 +234,15 @@ func proxy(w http.ResponseWriter, req *http.Request) {
 		panic("cannot hijack connection")
 	}
 
-	// E.g. `nonuk`, `sbr_low` `bbc_radio_one`, or `uk`, `sbr_high`, `bbc_1xtra`
+	// [ww]/[uk], [48000/96000]/[128000/320000], bbc_radio_one/bbc_1xtra/...
 	region, quality, name := m[1], m[2], m[3]
 
-	// TODO: We probably shouldn't poll the top level playlist.
-	mainPlaylistURL := fmt.Sprintf(targetURI, region, quality, name)
+	mediaPlaylistURL :=
+		fmt.Sprintf(targetURI, region, region, name, name, name, quality)
 
 	// This validates the parameters as a side-effect.
-	target, err := resolveM3U8(mainPlaylistURL)
-	if err == nil && len(target) == 0 {
+	media, err := resolveM3U8(mediaPlaylistURL)
+	if err == nil && len(media) == 0 {
 		err = errors.New("cannot resolve playlist")
 	}
 	if err != nil {
@@ -256,7 +251,7 @@ func proxy(w http.ResponseWriter, req *http.Request) {
 	}
 
 	wantMeta := req.Header.Get("Icy-MetaData") == "1"
-	resp, err := http.Head(target[0])
+	resp, err := http.Head(media[0])
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -286,7 +281,7 @@ func proxy(w http.ResponseWriter, req *http.Request) {
 	go metaProc(req.Context(), name, metaChan)
 
 	chunkChan := make(chan []byte)
-	go dataProc(req.Context(), mainPlaylistURL, metaint, chunkChan)
+	go dataProc(req.Context(), mediaPlaylistURL, metaint, chunkChan)
 
 	// dataProc may return less data near the end of a subfile, so we give it
 	// a maximum count of bytes to return at once and do our own buffering.

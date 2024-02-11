@@ -19,14 +19,19 @@ Build dependencies: go
  $ cd bbc-on-ice
  $ go build
 
+or, if you know what you're doing:
+
+ $ go install janouch.name/bbc-on-ice@master
+
 To run the local server:
 
  $ ./bbc-on-ice :8000
 
-Streams have URLs in the following form:
+Streams have URLs in the following form, derived from
+https://gist.github.com/bpsib/67089b959e4fa898af69fea59ad74bc3[this list]:
 
- $ mpv http://localhost:8000/nonuk/sbr_low/bbc_radio_one
- $ mpv http://localhost:8000/uk/sbr_high/bbc_1xtra
+ $ mpv http://localhost:8000/ww/96000/bbc_radio_one
+ $ mpv http://localhost:8000/uk/320000/bbc_1xtra
 
 Socket activation
 -----------------
