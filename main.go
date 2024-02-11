@@ -23,18 +23,13 @@ import (
 const (
 	targetURI = "http://as-hls-%s-live.akamaized.net/pool_904/live/%s/" +
 		"%s/%s.isml/%s-audio%%3d%s.norewind.m3u8"
-	networksURI = "https://rms.api.bbc.co.uk/radio/networks.json"
-	metaURI     = "https://rms.api.bbc.co.uk/v2/services/%s/segments/latest"
+	networksURI1 = "https://rms.api.bbc.co.uk/radio/networks.json"
+	networksURI2 = "https://rms.api.bbc.co.uk/v2/networks/%s"
+	metaURI      = "https://rms.api.bbc.co.uk/v2/services/%s/segments/latest"
 )
 
-type meta struct {
-	title   string // what's playing right now
-	timeout uint   // timeout for the next poll in ms
-}
-
-// getServiceTitle returns a human-friendly identifier for a BBC service ID.
-func getServiceTitle(name string) (string, error) {
-	resp, err := http.Get(networksURI)
+func getServiceTitle1(name string) (string, error) {
+	resp, err := http.Get(networksURI1)
 	if resp != nil {
 		defer resp.Body.Close()
 	}
@@ -64,6 +59,43 @@ func getServiceTitle(name string) (string, error) {
 		}
 	}
 	return name, errors.New("unknown service")
+}
+
+// getServiceTitle returns a human-friendly identifier for a BBC service ID.
+func getServiceTitle(name string) (string, error) {
+	// This endpoint is incomplete,
+	// but it contains the kind of service titles we want.
+	title, err := getServiceTitle1(name)
+	if err == nil {
+		return title, nil
+	}
+
+	// Network IDs tend to coincide with service IDs.
+	resp, err := http.Get(fmt.Sprintf(networksURI2, name))
+	if resp != nil {
+		defer resp.Body.Close()
+	}
+	if err != nil {
+		return name, err
+	}
+	b, err := ioutil.ReadAll(resp.Body)
+
+	var v struct {
+		LongTitle string `json:"long_title"`
+	}
+	err = json.Unmarshal(b, &v)
+	if err != nil {
+		return name, errors.New("invalid metadata response")
+	}
+	if v.LongTitle == "" {
+		return name, errors.New("unknown service")
+	}
+	return v.LongTitle, nil
+}
+
+type meta struct {
+	title   string // what's playing right now
+	timeout uint   // timeout for the next poll in ms
 }
 
 var errNoSong = errors.New("no song is playing")
