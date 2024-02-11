@@ -23,13 +23,50 @@ import (
 const (
 	targetURI = "http://as-hls-%s-live.akamaized.net/pool_904/live/%s/" +
 		"%s/%s.isml/%s-audio%%3d%s.norewind.m3u8"
-	metaURI = "https://rms.api.bbc.co.uk/v2/services/%s/segments/latest"
+	networksURI = "https://rms.api.bbc.co.uk/radio/networks.json"
+	metaURI     = "https://rms.api.bbc.co.uk/v2/services/%s/segments/latest"
 )
 
 type meta struct {
 	title   string // what's playing right now
 	timeout uint   // timeout for the next poll in ms
 }
+
+// getServiceTitle returns a human-friendly identifier for a BBC service ID.
+func getServiceTitle(name string) (string, error) {
+	resp, err := http.Get(networksURI)
+	if resp != nil {
+		defer resp.Body.Close()
+	}
+	if err != nil {
+		return name, err
+	}
+	b, err := ioutil.ReadAll(resp.Body)
+
+	var v struct {
+		Results []struct {
+			Services []struct {
+				ID    string `json:"id"`
+				Title string `json:"title"`
+			} `json:"services"`
+		} `json:"results"`
+	}
+	err = json.Unmarshal(b, &v)
+	if err != nil {
+		return name, errors.New("invalid metadata response")
+	}
+
+	for _, network := range v.Results {
+		for _, service := range network.Services {
+			if service.ID == name {
+				return service.Title, nil
+			}
+		}
+	}
+	return name, errors.New("unknown service")
+}
+
+var errNoSong = errors.New("no song is playing")
 
 // getMeta retrieves and decodes metadata info from an independent webservice.
 func getMeta(name string) (*meta, error) {
@@ -41,6 +78,9 @@ func getMeta(name string) (*meta, error) {
 		return nil, err
 	}
 	b, err := ioutil.ReadAll(resp.Body)
+	if os.Getenv("DEBUG") != "" {
+		log.Println(string(b))
+	}
 
 	// TODO: update more completely for the new OpenAPI
 	//  - `broadcasts/poll/bbc_radio_one` looks almost useful
@@ -63,7 +103,7 @@ func getMeta(name string) (*meta, error) {
 		return nil, errors.New("invalid metadata response")
 	}
 	if len(v.Data) == 0 || !v.Data[0].Offset.NowPlaying {
-		return nil, errors.New("no song is playing")
+		return nil, errNoSong
 	}
 
 	titles := v.Data[0].Titles
@@ -124,9 +164,10 @@ func metaProc(ctx context.Context, name string, out chan<- string) {
 	var interval time.Duration
 	for {
 		meta, err := getMeta(name)
-		if err != nil {
-			current = name + " - " + err.Error()
-			interval = maxInterval
+		if err == errNoSong {
+			interval, current = maxInterval, ""
+		} else if err != nil {
+			interval, current = maxInterval, err.Error()
 		} else {
 			current = meta.title
 			interval = time.Duration(meta.timeout) * time.Millisecond
@@ -263,11 +304,10 @@ func proxy(w http.ResponseWriter, req *http.Request) {
 	}
 	defer conn.Close()
 
-	// TODO: Retrieve some general information from somewhere?
-	// There's nothing interesting in the playlist files.
+	serviceTitle, _ := getServiceTitle(name)
 
 	fmt.Fprintf(bufrw, "ICY 200 OK\r\n")
-	fmt.Fprintf(bufrw, "icy-name:%s\r\n", name)
+	fmt.Fprintf(bufrw, "icy-name:%s\r\n", serviceTitle)
 	// BBC marks this as a video type, maybe just force audio/mpeg.
 	fmt.Fprintf(bufrw, "content-type:%s\r\n", resp.Header["Content-Type"][0])
 	fmt.Fprintf(bufrw, "icy-pub:%d\r\n", 0)
@@ -300,6 +340,9 @@ func proxy(w http.ResponseWriter, req *http.Request) {
 	for {
 		select {
 		case title := <-metaChan:
+			if title == "" {
+				title = serviceTitle
+			}
 			queuedMetaUpdate = []byte(fmt.Sprintf("StreamTitle='%s'",
 				strings.Replace(title, "'", "’", -1)))
 		case chunk, ok := <-chunkChan:
