@@ -67,14 +67,13 @@ func getMeta(name string) (*meta, error) {
 	}
 
 	titles := v.Data[0].Titles
-	parts := []string{}
-	if titles.Tertiary != nil {
-		parts = append(parts, *titles.Tertiary)
-	}
+	parts := []string{titles.Primary}
 	if titles.Secondary != nil {
 		parts = append(parts, *titles.Secondary)
 	}
-	parts = append(parts, titles.Primary)
+	if titles.Tertiary != nil {
+		parts = append(parts, *titles.Tertiary)
+	}
 	return &meta{timeout: 5000, title: strings.Join(parts, " - ")}, nil
 }
 
