@@ -6,10 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"regexp"
@@ -21,22 +21,34 @@ import (
 )
 
 const (
-	targetURI = "http://as-hls-%s-live.akamaized.net/pool_904/live/%s/" +
+	targetURI = "http://as-hls-%s-live.akamaized.net/pool_%s/live/%s/" +
 		"%s/%s.isml/%s-audio%%3d%s.norewind.m3u8"
 	networksURI1 = "https://rms.api.bbc.co.uk/radio/networks.json"
 	networksURI2 = "https://rms.api.bbc.co.uk/v2/networks/%s"
 	metaURI      = "https://rms.api.bbc.co.uk/v2/services/%s/segments/latest"
 )
 
+var client = &http.Client{Transport: &http.Transport{}}
+
+func get(url string) (resp *http.Response, err error) {
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+	// lstn.lv returned 403 for the default net.http User-Agent.
+	req.Header.Set("User-Agent", "bbc-on-ice/1")
+	return client.Do(req)
+}
+
 func getServiceTitle1(name string) (string, error) {
-	resp, err := http.Get(networksURI1)
+	resp, err := get(networksURI1)
 	if resp != nil {
 		defer resp.Body.Close()
 	}
 	if err != nil {
 		return name, err
 	}
-	b, err := ioutil.ReadAll(resp.Body)
+	b, err := io.ReadAll(resp.Body)
 
 	var v struct {
 		Results []struct {
@@ -71,14 +83,14 @@ func getServiceTitle(name string) (string, error) {
 	}
 
 	// Network IDs tend to coincide with service IDs.
-	resp, err := http.Get(fmt.Sprintf(networksURI2, name))
+	resp, err := get(fmt.Sprintf(networksURI2, name))
 	if resp != nil {
 		defer resp.Body.Close()
 	}
 	if err != nil {
 		return name, err
 	}
-	b, err := ioutil.ReadAll(resp.Body)
+	b, err := io.ReadAll(resp.Body)
 
 	var v struct {
 		LongTitle string `json:"long_title"`
@@ -102,14 +114,14 @@ var errNoSong = errors.New("no song is playing")
 
 // getMeta retrieves and decodes metadata info from an independent webservice.
 func getMeta(name string) (*meta, error) {
-	resp, err := http.Get(fmt.Sprintf(metaURI, name))
+	resp, err := get(fmt.Sprintf(metaURI, name))
 	if resp != nil {
 		defer resp.Body.Close()
 	}
 	if err != nil {
 		return nil, err
 	}
-	b, err := ioutil.ReadAll(resp.Body)
+	b, err := io.ReadAll(resp.Body)
 	if os.Getenv("DEBUG") != "" {
 		log.Println(string(b))
 	}
@@ -152,14 +164,16 @@ func getMeta(name string) (*meta, error) {
 // resolveM3U8 resolves an M3U8 playlist to the first link that seems to
 // be playable, possibly recursing.
 func resolveM3U8(target string) (out []string, err error) {
-	resp, err := http.Get(target)
-	if resp != nil {
-		defer resp.Body.Close()
-	}
+	resp, err := get(target)
 	if err != nil {
 		return nil, err
 	}
-	b, err := ioutil.ReadAll(resp.Body)
+	defer resp.Body.Close()
+
+	b, err := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%s: %s", target, resp.Status)
+	}
 	if !utf8.Valid(b) {
 		return nil, errors.New("invalid UTF-8")
 	}
@@ -181,6 +195,36 @@ func resolveM3U8(target string) (out []string, err error) {
 		out = append(out, line)
 	}
 	return out, nil
+}
+
+const resolveURI = "https://lstn.lv/bbcradio.m3u8?station=%s"
+
+var poolRE = regexp.MustCompile(`/pool_([^/]+)/`)
+
+// resolvePool figures out the randomized part of stream URIs.
+func resolvePool(name string) (pool string, err error) {
+	target := fmt.Sprintf(resolveURI, url.QueryEscape(name))
+	resp, err := get(target)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	b, err := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("%s: %s", target, resp.Status)
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+		if m := poolRE.FindStringSubmatch(line); m == nil {
+			return "", fmt.Errorf("%s: unexpected URI", target)
+		} else {
+			return m[1], nil
+		}
+	}
+	return "", fmt.Errorf("%s: no URI", target)
 }
 
 // metaProc periodically polls the sub-URL given by name for titles and sends
@@ -264,7 +308,7 @@ func dataProc(ctx context.Context, playlistURL string, maxChunk int,
 	go urlProc(ctx, playlistURL, urls)
 
 	for url := range urls {
-		resp, err := http.Get(url)
+		resp, err := get(url)
 		if resp != nil {
 			defer resp.Body.Close()
 		}
@@ -307,10 +351,15 @@ func proxy(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// [ww]/[uk], [48000/96000]/[128000/320000], bbc_radio_one/bbc_1xtra/...
-	region, quality, name := m[1], m[2], m[3]
+	region, quality, name, pool := m[1], m[2], m[3], "904"
+	if p, err := resolvePool(name); err != nil {
+		log.Printf("failed to resolve pool: %s\n", err)
+	} else {
+		pool = p
+	}
 
 	mediaPlaylistURL :=
-		fmt.Sprintf(targetURI, region, region, name, name, name, quality)
+		fmt.Sprintf(targetURI, region, pool, region, name, name, name, quality)
 
 	// This validates the parameters as a side-effect.
 	media, err := resolveM3U8(mediaPlaylistURL)
