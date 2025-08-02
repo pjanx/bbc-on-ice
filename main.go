@@ -35,7 +35,7 @@ func get(url string) (resp *http.Response, err error) {
 	if err != nil {
 		return nil, err
 	}
-	// lstn.lv returned 403 for the default net.http User-Agent.
+	// lsn.lv returned 403 for the default net.http User-Agent.
 	req.Header.Set("User-Agent", "bbc-on-ice/1")
 	return client.Do(req)
 }
@@ -197,7 +197,7 @@ func resolveM3U8(target string) (out []string, err error) {
 	return out, nil
 }
 
-const resolveURI = "https://lstn.lv/bbcradio.m3u8?station=%s"
+const resolveURI = "https://lsn.lv/bbcradio.m3u8?station=%s"
 
 var poolRE = regexp.MustCompile(`/pool_([^/]+)/`)
 
